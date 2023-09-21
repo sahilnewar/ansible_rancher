@@ -1,6 +1,8 @@
 ---
 - name: playbook to install/prepare k8s nodes for Rancher
-  hosts: rancher_k8s_nodes
+  hosts: all
+  become: yes
+  become_method: sudo
   roles:
     - role: docker
     - role: firewalld
