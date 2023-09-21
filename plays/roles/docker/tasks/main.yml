@@ -1,0 +1,4 @@
+---
+    
+- name: basic docker setup
+  import_tasks: docker_setup.yml

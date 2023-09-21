@@ -1,0 +1,213 @@
+---
+- name: Check if api_token is already present (rke_rancher_clusters was run before)
+  set_fact:
+    custom_k8s_cluster_api_key: "{{ hostvars['RANCHER_TOKEN_HOLDER']['api_token'] }}"
+  when:
+  - hostvars['RANCHER_TOKEN_HOLDER'] is defined
+  - hostvars['RANCHER_TOKEN_HOLDER']['api_token'] is defined
+  - (hostvars['RANCHER_TOKEN_HOLDER']['api_token'] | length) > 0
+  - (custom_k8s_cluster_api_key | length) == 0
+
+- name: Get all Cluster from Rancher Control Plane
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusters"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+  register: rancher_cluster
+  check_mode: no
+
+- name: Set Fact for current cluster
+  delegate_to: localhost
+  set_fact:
+    cluster: "{{ rancher_cluster | json_query(\"json.data[?name == '\" + custom_k8s_cluster_name + \"']\") }}"
+  check_mode: no
+
+- name: Set Fact for current cluster version, if it already exists
+  delegate_to: localhost
+  set_fact:
+    cluster_networkpolicy: "{{ cluster[0]['enableNetworkPolicy'] }}"
+    cluster_version: "{{ cluster[0]['rancherKubernetesEngineConfig']['kubernetesVersion'] }}"
+    cluster_ingress: "{{ cluster[0]['rancherKubernetesEngineConfig']['ingress']['provider'] }}"
+    cluster_psp_template: "{{ cluster[0]['defaultPodSecurityPolicyTemplateId'] }}"
+    cluster_id: "{{ cluster[0]['id'] }}"
+  check_mode: no
+  when:
+  - (cluster | length) > 0
+
+- name: Print cluster facts from the Rancher API
+  debug:
+    msg:
+      - "Currently applied cluster version: {{ cluster_version | lower }}"
+      - "  -> Cluster version configuration: {{ custom_k8s_cluster_kubernetes_version | lower }}"
+      - "Currently applied cluster networkpolicy configuration: {{ cluster_networkpolicy | lower }}"
+      - "  -> Cluster networkpolicy configuration: {{ custom_k8s_cluster_enable_network_policy | lower }}"
+      - "Currently applied cluster ingress controller: {{ cluster_ingress | lower }}"
+      - "  -> Cluster ingress controller configuration: {{ custom_k8s_clusters_ingress_provider | lower }}"
+      - "Currently applied cluster PSP template: {{ cluster_psp_template | lower }}"
+      - "  -> Cluster PSP template configuration: {{ custom_k8s_clusters_default_psp | lower }}"
+  when:
+    - (cluster | length) > 0
+
+- name: Cluster does not exist, create new Cluster
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusters"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+    body: "{{ lookup('template','cluster.json.j2') | regex_replace('\n',' ') }}"
+    body_format: json
+    status_code: 201
+    method: POST
+  register: cluster_new
+  when:
+    - (cluster | length) == 0
+
+- name: Cluster does exist, check if update is requested
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusters/{{ cluster_id }}"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+    body: "{{ lookup('template','cluster.json.j2') | regex_replace('\n',' ') }}"
+    body_format: json
+    status_code: 200
+    method: PUT
+  when: |
+      ((cluster | length) > 0) and
+      ((custom_k8s_cluster_enable_network_policy | lower ) != (cluster_networkpolicy | lower) or
+      (custom_k8s_cluster_kubernetes_version | lower) != (cluster_version | lower) or
+      (custom_k8s_clusters_ingress_provider | lower) != (cluster_ingress | lower) or
+      (custom_k8s_clusters_default_psp | lower) != (cluster_psp_template | lower))
+
+- name: Set fact if existing cluster
+  set_fact:
+    cluster: "{{ cluster[0] }}"
+  when:
+    - (cluster | length) > 0
+
+- name: Set fact if new cluster
+  set_fact:
+    cluster: "{{ cluster_new.json }}"
+  when:
+    - cluster_new is not skipped
+
+- name: Get Cluster Registration Token
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusterregistrationtoken?id={{ cluster.id }}"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+  register: clusterregistrationtoken
+  check_mode: no
+
+- name: Filter for correct clusterRegistrationToken
+  set_fact:
+    clusterregistrationtoken: "{{ clusterregistrationtoken | json_query(\"json.data[?clusterId == '\" + cluster.id + \"']\") }}"
+
+- name: Create cluster registration token when not already exists
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusterregistrationtoken"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+    body:
+      type: "clusterRegistrationToken"
+      clusterId: "{{ cluster.id }}"
+    body_format: json
+    status_code: 201
+    method: POST
+  register: newclusterRegistrationToken
+  when:
+    - ( clusterregistrationtoken | length ) == 0
+
+- name: Set cluster registration token if new token
+  set_fact:
+    clusterregistrationtoken: "{{ newclusterRegistrationToken.json.token }}"
+  when:
+    - newclusterRegistrationToken is not skipped
+
+- name: Set cluster registration token if existing token
+  set_fact:
+    clusterregistrationtoken: "{{ clusterregistrationtoken[0].token }}"
+  when:
+    - newclusterRegistrationToken is skipped
+    - ( clusterregistrationtoken | length ) > 0
+
+- name: Cluster registration token
+  debug:
+    msg: "{{ clusterregistrationtoken }}"
+
+- name: Get CA checksum
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusterregistrationtoken?id={{ cluster.id }}"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+  register: clusternodecommand
+  check_mode: no
+  when:
+    - custom_k8s_cluster_self_signed_certificate
+
+- name: Filter for correct cluster clusterNodeCommand
+  set_fact:
+    clusternodecommand: "{{ clusternodecommand | json_query(\"json.data[?clusterId == '\" + cluster.id + \"']\") }}"
+  when:
+    - custom_k8s_cluster_self_signed_certificate
+
+- name: Set cluster node command
+  set_fact:
+    clusternodecommand: "{{ clusternodecommand[0].nodeCommand }}"
+  when:
+    - custom_k8s_cluster_self_signed_certificate
+
+- name: Parse cluster ca-checksum
+  set_fact:
+    clustercachecksum: "{{ clusternodecommand | regex_search(custom_k8s_cluster_ca_checksum_param | string + '(\\s+)' +'(.*)', '\\2') | first }}"
+  when:
+    - custom_k8s_cluster_self_signed_certificate
+
+- name: Parsed ca-checksum from cluster
+  debug:
+    msg: "{{ clustercachecksum }}"
+  when:
+    - custom_k8s_cluster_self_signed_certificate
+
+- name: Get KubeConfig from Rancher Control Plane
+  uri:
+    url: "{{ custom_k8s_cluster_rancher_api }}/clusters/{{ cluster.id }}?action=generateKubeconfig"
+    validate_certs: "{{ custom_k8s_cluster_verify_ssl }}"
+    return_content: yes
+    headers:
+      Authorization: "Bearer {{ custom_k8s_cluster_api_key }}"
+    body_format: json
+    status_code: 200
+    method: POST
+  register: kubeconfig
+
+- name: Create local download directory
+  delegate_to: localhost
+  file:
+    path: "./custom_k8s_cluster"
+    state: directory
+    mode: 0755
+  run_once: true
+
+- name: Set KubeConfig filename
+  set_fact:
+    kubeconfigfile: "./custom_k8s_cluster/{{ cluster.id }}"
+  when:
+    - kubeconfig is not skipped
+
+- name: Store KubeConfig
+  copy:
+    content: "{{ kubeconfig.json.config }}"
+    dest: "{{ kubeconfigfile }}"
+  when:
+    - kubeconfig is not skipped
