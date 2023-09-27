@@ -25,7 +25,7 @@ rke_cluster_bin: "./rke-{{ rke_binary_version }}"
 rke_cluster_kube_config: "kube_config_config-{{ inventory_hostname }}.yml"
 rke_cluster_config: "config-{{ inventory_hostname }}.yml"
 rke_kubernetes_version: v1.19.4-rancher1-1
-rke_ssh_user: centos     # due to https://bugzilla.redhat.com/show_bug.cgi?id=1527565
+rke_ssh_user: sahilnewar31     # due to https://bugzilla.redhat.com/show_bug.cgi?id=1527565
 rke_ssh_agent_auth: true
 rke_network_interface: eth0
 rke_cluster_group_inventory_name: "{{ groups['rke_' + inventory_hostname] }}"

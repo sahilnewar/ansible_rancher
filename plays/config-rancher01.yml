@@ -14,7 +14,6 @@ nodes:
         - controlplane
         - etcd
         - worker
-      ssh_key_path: /home/sahilnewar31/.ssh/id_rsa
     - address: 35.196.155.104
       internal_address: 35.196.155.104
       user: sahilnewar31
@@ -22,9 +21,8 @@ nodes:
         - controlplane
         - etcd
         - worker
-      ssh_key_path: /home/sahilnewar31/.ssh/id_rsa
 
-kubernetes_version: "{{ rke_kubernetes_version }}"
+kubernetes_version: "v1.19.4-rancher1-1"
 
 addon_job_timeout: 30
 authentication:
